@@ -1,0 +1,7 @@
+*.pack
+*.pbf
+*.npz
+part-*.bin*
+build_report.json
+__pycache__/
+.pytest_cache/

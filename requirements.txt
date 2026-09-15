@@ -1,0 +1,5 @@
+numpy>=1.26
+rasterio>=1.4
+osmium>=4.0
+shapely>=2.0
+pytest>=8
