@@ -87,6 +87,11 @@ def poi_type(tags):
     # descartes: POIs modernos que no queremos aunque coincidan
     if tags.get("railway") == "station" and tags.get("station") == "subway":
         return 0
+    if tags.get("amenity") == "shelter" and (
+            tags.get("shelter_type") in ("public_transport", "picnic_shelter", "sun_shelter",
+                                         "field_shelter", "changing_rooms")
+            or tags.get("public_transport") or tags.get("bus") == "yes"):
+        return 0  # marquesinas y similares, no refugios
     if tags.get("leisure") == "garden" and tags.get("garden:type") != "botanical":
         return 0
     for typ, rules in POI_RULES:

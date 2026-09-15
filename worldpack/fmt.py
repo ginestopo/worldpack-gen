@@ -9,6 +9,9 @@ MODE_NAMES = ("CONST", "PAL1", "PAL2", "PAL4", "RLE", "RAW")
 PAL_SIZE = {M_PAL1: (2, 1), M_PAL2: (4, 2), M_PAL4: (16, 4)}
 ELEV_STEPS = (1, 2, 4, 8, 16, 32, 64, 128)
 POI_MAX = 8
+# Paso minimo de altitud. Con 1-2 m el ruido del DEM llena los 64 valores y la
+# capa sale RAW; con 4 m los chunks llanos caben en PAL4. Error maximo: +-2 m.
+ELEV_MIN_STEP = 4
 CF_COAST, CF_PROTECTED, CF_NAVWATER = 1, 2, 4
 
 
@@ -115,7 +118,8 @@ def quantize_elevation(elev):
     e = np.clip(np.asarray(elev, dtype=np.int32), 0, 4095 + 63 * 128)
     base = int(min(e.min(), 4095))
     rng = int(e.max()) - base
-    step_i = next((i for i, s in enumerate(ELEV_STEPS) if rng <= 63 * s), 7)
+    step_i = next((i for i, s in enumerate(ELEV_STEPS)
+                   if s >= ELEV_MIN_STEP and rng <= 63 * s), 7)
     off = np.clip(np.rint((e - base) / ELEV_STEPS[step_i]), 0, 63).astype(np.uint32)
     return base | (step_i << 12), off
 

@@ -144,7 +144,7 @@ def test_elevation_quantization():
         e = 1000 + np.linspace(0, rng_m, 1024).astype(int)
         packed, off = fmt.quantize_elevation(e)
         base, step = fmt.elev_unpack(packed)
-        assert base == 1000 and rng_m <= 63 * step
+        assert base == 1000 and rng_m <= 63 * step and step >= fmt.ELEV_MIN_STEP
         assert np.abs(base + off * step - e).max() <= step // 2
     packed, _ = fmt.quantize_elevation(np.full(1024, -5))
     assert fmt.elev_unpack(packed)[0] == 0  # bajo el nivel del mar se recorta
@@ -180,7 +180,7 @@ def test_pack_lookup(tmp_path):
             lx, ly = grid.ZPERM[i]
             c = p.at(x0 + lx, y0 + ly)
             assert c["biome"] == layers["biome"][i]
-            assert c["elevation"] == layers["elev"][i]
+            assert abs(c["elevation"] - layers["elev"][i]) <= fmt.ELEV_MIN_STEP // 2
             assert c["poi"] == (7 if i == 5 else 0)
 
 
@@ -229,6 +229,9 @@ def test_poi_rules():
     assert poi_type({"natural": "tree"}) == 0
     assert poi_type({"natural": "tree", "denotation": "natural_monument"}) == 25
     assert poi_type({"amenity": "hospital"}) == 0
+    assert poi_type({"amenity": "shelter", "shelter_type": "basic_hut"}) == 41
+    assert poi_type({"amenity": "shelter", "shelter_type": "public_transport"}) == 0
+    assert poi_type({"amenity": "shelter", "public_transport": "platform"}) == 0
 
 
 # ---------- extremo a extremo con GeoTIFF locales ----------
