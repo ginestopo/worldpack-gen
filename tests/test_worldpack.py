@@ -1,3 +1,4 @@
+import math
 import struct
 
 import numpy as np
@@ -294,3 +295,108 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert 100 <= e_w < e_e <= 300
     assert abs(e_e - (100 + 0.9 * 200)) <= 3
     assert stats["modes"]["biome"].get(fmt.M_CONST, 0) > 0
+
+
+# ---------- hemisferio sur y oeste ----------
+@pytest.mark.parametrize("lon,lat,wc_tile,dem_tile", [
+    (21.0, 52.2, "N51E021", "N52_00_E021_00"),      # Varsovia
+    (-74.07, 4.71, "N03W075", "N04_00_W075_00"),    # Bogota
+    (-69.94, -4.21, "S06W072", "S05_00_W070_00"),   # Leticia
+    (0.5, -0.5, "S03E000", "S01_00_E000_00"),       # justo al sur del ecuador
+])
+def test_tile_url_hemispheres(lon, lat, wc_tile, dem_tile):
+    """Ambas fuentes nombran la tesela por su esquina SUROESTE, asi que al sur
+    del ecuador o al oeste de Greenwich el indice es el floor, no el truncado."""
+    for tmpl, deg, tok in ((rasters.WORLDCOVER, 3, wc_tile), (rasters.DEM, 1, dem_tile)):
+        tlat = int(math.floor(lat / deg) * deg)
+        tlon = int(math.floor(lon / deg) * deg)
+        assert tok in rasters._tile_url(tmpl, tlat, tlon)
+
+
+def test_end_to_end_southern(tmp_path, monkeypatch):
+    """Mismo recorrido que test_end_to_end pero al sur del ecuador y al oeste de
+    Greenwich, donde el bbox de la ventana y los indices de tesela son negativos."""
+    gid = grid.gh3_id(*grid.xy_from_gps(-69.94, -4.21))
+    gx0, gy0 = grid.gh3_origin(gid)
+    lon0 = gx0 * grid.CELL_DEG - 180
+    lat0 = gy0 * grid.CELL_DEG - 90
+    lon1 = lon0 + grid.GH3 * grid.CELL_DEG
+    lat1 = lat0 + grid.GH3 * grid.CELL_DEG
+    mid = (lon0 + lon1) / 2
+
+    def tile_name(tlat, tlon):
+        return (f"{'N' if tlat >= 0 else 'S'}{abs(tlat):02d}"
+                f"{'E' if tlon >= 0 else 'W'}{abs(tlon):03d}")
+
+    def tile_range(v0, v1, deg):
+        return range(int(math.floor(v0 / deg) * deg), int(math.ceil(v1)), deg)
+
+    # WorldCover 3x3 a ~110 m: mitad oeste selva, mitad este cultivo, un rio al norte
+    res, lake_lat = 1 / 1000, lat1 - 0.08
+    n = int(3 / res)
+    for tlat in tile_range(lat0, lat1, 3):
+        for tlon in tile_range(lon0, lon1, 3):
+            LON, LAT = np.meshgrid(tlon + (np.arange(n) + 0.5) * res,
+                                   tlat + 3 - (np.arange(n) + 0.5) * res)
+            wc = np.where(LON < mid, 10, 40).astype("uint8")
+            wc[(LAT > lake_lat) & (LAT < lake_lat + 0.04) & (LON > mid) & (LON < mid + 0.2)] = 80
+            _write_tile(tmp_path / f"wc_{tile_name(tlat, tlon)}.tif", wc,
+                        tlon, tlat + 3, res, "uint8", 0)
+            del LON, LAT, wc
+    # DEM de 1 grado: rampa de 100 a 300 m de oeste a este dentro de cada tesela
+    m = 300
+    for tlat in tile_range(lat0, lat1, 1):
+        for tlon in tile_range(lon0, lon1, 1):
+            dem = np.full((m, m), 100.0) + np.linspace(0, 200, m)[None, :]
+            _write_tile(tmp_path / f"dem_{tile_name(tlat, tlon)}.tif", dem,
+                        tlon, tlat + 1, 1 / m, "float32", -9999)
+    monkeypatch.setattr(rasters, "WORLDCOVER", str(tmp_path / "wc_{NS}{alat:02d}{EW}{alon:03d}.tif"))
+    monkeypatch.setattr(rasters, "DEM", str(tmp_path / "dem_{NS}{alat:02d}{EW}{alon:03d}.tif"))
+    rasters._missing.clear()
+
+    osm = OsmData()
+    wx, wy = grid.xy_from_gps(lon0 + 0.3, lat0 + 0.3)
+    osm.poi_keys = np.array([(wx << 17) | wy], np.int64)
+    osm.poi_types = np.array([30])  # volcan
+    osm.poi_counts[30] = 2
+
+    layers, pois = classify_gh3(gid, osm)
+    assert layers is not None
+    entries = encode_gh3(gid, layers, pois, {})
+    path = tmp_path / "sur.pack"
+    container.assemble(entries, path, (gx0, gy0, gx0 + 1023, gy0 + 1023), 20260915, 25, 52)
+    p = container.Pack(path)
+
+    assert p.at_gps(lon0 + 0.3, lat0 + 0.3)["biome"] == 12   # bosque
+    assert p.at_gps(lon0 + 0.3, lat0 + 0.3)["poi"] == 30
+    assert p.at_gps(lon1 - 0.3, lat0 + 0.3)["biome"] == 17   # cultivo
+    lake = p.at_gps(mid + 0.1, lake_lat + 0.02)
+    assert lake["biome"] == 2 and lake["water"] == 2         # agua interior, no mar
+    lon_q = lon0 + 0.3
+    frac = lon_q - math.floor(lon_q)
+    assert abs(p.at_gps(lon_q, lat0 + 0.3)["elevation"] - (100 + frac * 200)) <= 4
+
+
+def test_elevation_above_base_ceiling():
+    """Colombia pasa de 4095 m (el techo de la base de 12 bits): por encima solo
+    se pierde resolucion, nunca se recorta el valor."""
+    for lo, hi in ((4800, 5000), (5200, 5775), (0, 5775)):
+        e = np.linspace(lo, hi, 1024).astype(int)
+        packed, off = fmt.quantize_elevation(e)
+        base, step = fmt.elev_unpack(packed)
+        assert off.max() <= 63
+        assert np.abs(base + off.astype(np.int64) * step - e).max() <= step // 2 + 1
+
+
+# ---------- tabla de regiones ----------
+def test_region_table():
+    from worldpack.cli import REGIONS
+    for name, r in REGIONS.items():
+        lon0, lat0, lon1, lat1 = r["bbox"]
+        assert lon0 < lon1 and lat0 < lat1, name
+        ids, _ = grid.gh3_ids_for_bbox(*r["bbox"])
+        assert 1 <= r["shards"] <= len(ids), name
+        assert r["pbf"].endswith("-latest.osm.pbf"), name
+        for lon, lat, label in r["checks"]:
+            assert lon0 <= lon <= lon1 and lat0 <= lat <= lat1, (name, label)
+            assert " " not in label, label

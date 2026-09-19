@@ -6,7 +6,7 @@ on:
       region:
         description: Region a generar
         type: choice
-        options: [poland, zaragoza]
+        options: [poland, colombia, zaragoza]
         default: poland
       publish:
         description: Publicar el pack como release
@@ -24,12 +24,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      nshards: ${{ steps.plan.outputs.nshards }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12", cache: pip }
       - run: pip install -r requirements.txt
       - run: python -m pytest -q tests
+      - name: Plan de sharding de la region
+        id: plan
+        run: |
+          echo "shards=$(python -m worldpack.cli region "$REGION" shard-matrix)" >> "$GITHUB_OUTPUT"
+          echo "nshards=$(python -m worldpack.cli region "$REGION" shards)" >> "$GITHUB_OUTPUT"
 
   osm:
     needs: test
@@ -67,13 +75,13 @@ jobs:
           retention-days: 1
 
   shard:
-    needs: osm
+    needs: [test, osm]
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
       fail-fast: true
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: ${{ fromJson(needs.test.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -84,7 +92,8 @@ jobs:
       - name: Rasterizar y codificar shard ${{ matrix.shard }}
         run: |
           python -m worldpack.cli shard --region "$REGION" --osm osm.npz \
-            --shard ${{ matrix.shard }} --shards 4 --out part-${{ matrix.shard }}.bin
+            --shard ${{ matrix.shard }} --shards ${{ needs.test.outputs.nshards }} \
+            --out part-${{ matrix.shard }}.bin
       - uses: actions/upload-artifact@v4
         with:
           name: part-${{ matrix.shard }}
@@ -114,11 +123,9 @@ jobs:
             --content-version "$CV" --out "$REGION.pack" --report build_report.json part-*.bin
           ls -lh "$REGION.pack"
       - name: Comprobacion rapida
-        if: env.REGION == 'poland'
         run: |
-          for p in "21.0122 52.2297 Varsovia" "20.0883 49.1794 Rysy" \
-                   "19.9450 50.0647 Cracovia" "18.6466 54.3520 Gdansk"; do
-            set -- $p; echo "$3: $(python -m worldpack.cli query "$REGION.pack" $1 $2)"
+          python -m worldpack.cli region "$REGION" checks | while read -r LON LAT NAME; do
+            echo "$NAME: $(python -m worldpack.cli query "$REGION.pack" "$LON" "$LAT")"
           done
       - uses: actions/upload-artifact@v4
         with:

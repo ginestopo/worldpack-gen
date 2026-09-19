@@ -12,10 +12,26 @@ from .taxonomy import BIOME_MAX_V1, POI_MAX_V1
 
 REGIONS = {
     "poland": {"bbox": (14.0, 49.0, 24.2, 55.0),
-               "pbf": "https://download.geofabrik.de/europe/poland-latest.osm.pbf"},
+               "pbf": "https://download.geofabrik.de/europe/poland-latest.osm.pbf",
+               "shards": 4,
+               "checks": [(21.0122, 52.2297, "Varsovia"), (20.0883, 49.1794, "Rysy"),
+                          (19.9450, 50.0647, "Cracovia"), (18.6466, 54.3520, "Gdansk")]},
+    # El bbox llega hasta 82 W para incluir San Andres y Providencia; el mar
+    # sobrante no cuesta casi nada porque los gh3 sin tesela se omiten.
+    "colombia": {"bbox": (-82.0, -4.3, -66.8, 13.5),
+                 "pbf": "https://download.geofabrik.de/south-america/colombia-latest.osm.pbf",
+                 "shards": 12,
+                 "checks": [(-74.0721, 4.7110, "Bogota"), (-75.5636, 6.2518, "Medellin"),
+                            (-75.3222, 4.8925, "Nevado_del_Ruiz"),
+                            (-75.5144, 10.3910, "Cartagena"),
+                            (-69.9406, -4.2153, "Leticia"),
+                            (-81.7006, 12.5847, "San_Andres")]},
     "zaragoza": {"bbox": (-1.2, 41.4, -0.6, 41.8),
-                 "pbf": "https://download.geofabrik.de/europe/spain/aragon-latest.osm.pbf"},
+                 "pbf": "https://download.geofabrik.de/europe/spain/aragon-latest.osm.pbf",
+                 "shards": 1,
+                 "checks": [(-0.8773, 41.6488, "Zaragoza")]},
 }
+REGION_FIELDS = ("bbox", "pbf", "shards", "shard-matrix", "checks")
 
 
 def log(msg):
@@ -40,8 +56,14 @@ def merge_stats(into, s):
 
 def cmd_region(args):
     r = REGIONS[args.region]
-    key = args.field
-    val = r[key]
+    if args.field == "shard-matrix":
+        print(json.dumps(list(range(r["shards"]))))
+        return
+    if args.field == "checks":
+        for lon, lat, name in r["checks"]:
+            print(f"{lon} {lat} {name}")
+        return
+    val = r[args.field]
     print(",".join(map(str, val)) if isinstance(val, tuple) else val)
 
 
@@ -166,7 +188,7 @@ def main(argv=None):
 
     s = sub.add_parser("region")
     s.add_argument("region", choices=sorted(REGIONS))
-    s.add_argument("field", choices=["bbox", "pbf"])
+    s.add_argument("field", choices=list(REGION_FIELDS))
     s.set_defaults(fn=cmd_region)
 
     s = sub.add_parser("osm")
